@@ -26,19 +26,14 @@ async def transform_to_ai(image_bytes: bytes) -> str:
             # lucataco/instantid — лучшее сохранение лица + красивый стиль
             output = await asyncio.to_thread(
                 replicate.run,
-                "lucataco/instantid:a59a4f56c4d1067f05e7e1f4e4c8e99c651cca07e9e0b5a7a27e7f87c5d6b8e",
+                "tencentarc/photomaker:ddfc2b08d209f9fa8c1eca692712918bd449f695dabb4a958da31802a9570fe4",
                 input={
-                    "image": f,
-                    "prompt": (
-                        "a beautiful woman, same person, cyberpunk style, "
-                        "neon purple and blue lights, futuristic city background, "
-                        "glowing skin patterns, ultra detailed, 8k, cinematic"
-                    ),
-                    "negative_prompt": (
-                        "ugly, deformed, blurry, low quality, "
-                        "different person, nsfw"
-                    ),
-                    "num_inference_steps": 30,
+                    "input_image": f,
+                    "prompt": "img a beautiful woman, neonpunk style, neon purple and blue lights, futuristic city background, glowing skin, ultra detailed, 8k, cinematic",
+                    "negative_prompt": "ugly, deformed, blurry, low quality, different person, nsfw",
+                    "style_name": "Neonpunk",
+                    "num_outputs": 1,
+                    "num_inference_steps": 20,
                     "guidance_scale": 5,
                 }
             )
