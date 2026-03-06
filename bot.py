@@ -27,10 +27,10 @@ async def enhance_face(image_bytes: bytes) -> bytes:
 
     output = await asyncio.to_thread(
         replicate.run,
-        "tencentarc/gfpgan:0fbacf7afc6817f3606c37d0f1a2028c22b04c9b7c4a4b8d47c6e7e89c74b1",
+        "tencentarc/gfpgan:0fbacf7afc6c144e5be9767cff80f25aff23e52b0708f17e20f9879b2f21516c",
         input={
             "img":     buf,
-            "version": "v1.4",  # лучше сохраняет детали и идентичность
+            "version": "v1.4",
             "scale":   2,
         }
     )
@@ -143,11 +143,22 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 def main():
-    try:
-        req.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/deleteWebhook?drop_pending_updates=true", timeout=10)
-        time.sleep(3)
-    except:
-        pass
+    # Ждём пока старый инстанс отключится
+    for attempt in range(5):
+        try:
+            req.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/deleteWebhook?drop_pending_updates=true", timeout=10)
+        except:
+            pass
+        time.sleep(5)
+        try:
+            resp = req.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates?timeout=1", timeout=5)
+            if resp.status_code == 200:
+                print(f"[INFO] Ready to start (attempt {attempt+1})")
+                break
+        except:
+            pass
+        print(f"[INFO] Waiting for old instance... attempt {attempt+1}/5")
+    time.sleep(3)
 
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
