@@ -33,9 +33,9 @@ async def transform_to_ai(image_bytes: bytes) -> str:
                 "zsxkib/instant-id:c98b2e7a196828d00955767813b81fc05c5c9b294c670c6d147d545fed4ceecf",
                 input={
                     "image": f,
-                    "prompt": "a stunning AI influencer woman, same person, preserve facial features, hyper realistic, perfect skin, glossy lips, long lashes, soft studio lighting, luxurious fashion, elegant pose, ultra detailed, 8k, vogue magazine cover, photorealistic masterpiece",
-                    "negative_prompt": "ugly, deformed, blurry, low quality, different person, changed face, cartoon, anime, painting, drawing, illustration, nsfw",
-                    "sdxl_weights": "stable-diffusion-xl-base-1.0",
+                    "prompt": "close up portrait photo of a woman, same person, photorealistic, soft natural light, flawless skin, subtle makeup, glossy lips, long eyelashes, elegant, sensual, confident, high fashion, shot on Sony A7, 85mm lens, shallow depth of field, instagram model",
+                    "negative_prompt": "ugly, deformed, blurry, low quality, different person, changed face, cartoon, anime, painting, drawing, crown, tiara, hat, accessory, watermark, text, logo, extra fingers, bad hands, nsfw",
+                    "sdxl_weights": "protovision-xl-high-fidel",
                     "width": 640,
                     "height": 640,
                     "guidance_scale": 5,
