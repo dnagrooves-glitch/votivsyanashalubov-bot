@@ -4,7 +4,7 @@ import asyncio
 import httpx
 import replicate
 import base64
-from PIL import Image, ImageDraw, ImageFont
+import tempfile
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
@@ -14,8 +14,8 @@ DID_API_KEY           = os.getenv("DID_API_KEY")
 CHORUS_AUDIO_URL      = os.getenv("CHORUS_AUDIO_URL")
 TRACK_URL             = os.getenv("TRACK_URL", "https://band.link/vcvotivsyanashalubov")
 
-WATERMARK_LINE1 = "вот и вся наша любовь • VEÉKA"
-WATERMARK_LINE2 = "слушать трек ↑"
+WATERMARK_LINE1 = "vot i vsya nasha lyubov • VEEKA"
+WATERMARK_LINE2 = "slushat trek"
 
 AI_PROMPT = (
     "portrait of a beautiful woman, same face, same features, "
@@ -29,24 +29,29 @@ NEGATIVE_PROMPT = (
 
 
 async def transform_to_ai(image_bytes: bytes) -> str:
-    b64 = base64.b64encode(image_bytes).decode()
-    data_uri = f"data:image/jpeg;base64,{b64}"
-
     os.environ["REPLICATE_API_TOKEN"] = REPLICATE_API_TOKEN
 
-    output = await asyncio.to_thread(
-        replicate.run,
-        "tencentarc/photomaker:ddfc2b08d209f9fa8c1eca692712918bd449f695dabb4a958da31802a9570fe4",
-        input={
-            "prompt": f"img, {AI_PROMPT}",
-            "input_image": data_uri,
-            "negative_prompt": NEGATIVE_PROMPT,
-            "num_outputs": 1,
-            "guidance_scale": 5,
-            "num_inference_steps": 20,
-            "style_name": "Neonpunk",
-        }
-    )
+    with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+        tmp.write(image_bytes)
+        tmp_path = tmp.name
+
+    try:
+        with open(tmp_path, "rb") as f:
+            output = await asyncio.to_thread(
+                replicate.run,
+                "tencentarc/photomaker:ddfc2b08d209f9fa8c1eca692712918bd449f695dabb4a958da31802a9570fe4",
+                input={
+                    "prompt": f"img, {AI_PROMPT}",
+                    "input_image": f,
+                    "negative_prompt": NEGATIVE_PROMPT,
+                    "num_outputs": 1,
+                    "guidance_scale": 5,
+                    "num_inference_steps": 20,
+                    "style_name": "Neonpunk",
+                }
+            )
+    finally:
+        os.unlink(tmp_path)
 
     return output[0] if isinstance(output, list) else str(output)
 
@@ -101,8 +106,6 @@ async def create_lipsync(image_url: str) -> bytes:
 
 
 async def add_watermark_to_video(video_bytes: bytes) -> bytes:
-    import tempfile
-
     with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp_in:
         tmp_in.write(video_bytes)
         tmp_in_path = tmp_in.name
