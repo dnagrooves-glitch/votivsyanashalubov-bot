@@ -158,15 +158,25 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         file = await photo.get_file()
         image_bytes = bytes(await file.download_as_bytearray())
 
-        # Шаг 1 — AI трансформация
+        # Загружаем оригинал в D-ID напрямую (без AI-трансформации)
         t1 = time.time()
-        ai_image_url = await transform_to_ai(image_bytes)
-        print(f"[INFO] AI image ({time.time()-t1:.1f}s): {ai_image_url}")
 
-        await msg.edit_text("⏳ Шаг 2/2 — накладываю голос... (~30с)")
+        await msg.edit_text("⏳ Создаю видео... (~30с)")
 
-        # Шаг 2 — Загружаем AI-картинку в D-ID
-        did_image_url = await upload_to_did(ai_image_url)
+        img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=95)
+        buf.seek(0)
+
+        async with httpx.AsyncClient(timeout=30) as client:
+            upload = await client.post(
+                "https://api.d-id.com/images",
+                headers={"Authorization": f"Basic {DID_API_KEY}"},
+                files={"image": ("face.jpg", buf, "image/jpeg")}
+            )
+            upload.raise_for_status()
+            did_image_url = upload.json()["url"]
+            print(f"[INFO] Uploaded to D-ID: {did_image_url}")
 
         # Шаг 3 — Lipsync на AI-картинке
         video_bytes = await create_lipsync(did_image_url)
