@@ -18,35 +18,49 @@ TRACK_URL           = os.getenv("TRACK_URL", "https://band.link/vcvotivsyanashal
 TIKTOK_SOUND_URL    = "https://vt.tiktok.com/ZS9dkQxdcqNFN-RYvnX"
 
 
-# ─── ШАГ 1: AI-трансформация (InstantID) ───────────────────────────────────
+import random
+
+# Базовые фото красивых AI-моделей для face swap
+# Анфас, хорошее освещение — лучший результат для face swap
+BASE_IMAGES = [
+    "https://replicate.delivery/pbxt/JkUYWp60oNwz1SF9AJvJPv7upLqucTyaeCxQ07qZGijlDKxt/face_swap_09.jpg",
+    "https://images.unsplash.com/photo-1529626455594-4ff0802cfb7e?w=640&h=896&fit=crop&crop=face",
+    "https://images.unsplash.com/photo-1524504388940-b1c1722653e1?w=640&h=896&fit=crop&crop=face",
+    "https://images.unsplash.com/photo-1488716820095-cbe80883c496?w=640&h=896&fit=crop&crop=face",
+]
+
+# ─── ШАГ 1: Face Swap (быстро, лицо сохраняется 100%) ──────────────────────
 async def transform_to_ai(image_bytes: bytes) -> str:
     os.environ["REPLICATE_API_TOKEN"] = REPLICATE_API_TOKEN
 
-    with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
-        tmp.write(image_bytes)
-        tmp_path = tmp.name
+    # Загружаем фото пользователя в D-ID чтобы получить публичный URL
+    img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=95)
+    buf.seek(0)
 
-    try:
-        with open(tmp_path, "rb") as f:
-            output = await asyncio.to_thread(
-                replicate.run,
-                "zsxkib/instant-id:c98b2e7a196828d00955767813b81fc05c5c9b294c670c6d147d545fed4ceecf",
-                input={
-                    "image": f,
-                    "prompt": "close up portrait photo of a woman, same person, photorealistic, soft natural light, flawless skin, subtle makeup, glossy lips, long eyelashes, elegant, sensual, confident, high fashion, shot on Sony A7, 85mm lens, shallow depth of field, instagram model",
-                    "negative_prompt": "ugly, deformed, blurry, low quality, different person, changed face, cartoon, anime, painting, drawing, crown, tiara, hat, accessory, watermark, text, logo, extra fingers, bad hands, nsfw",
-                    "sdxl_weights": "protovision-xl-high-fidel",
-                    "width": 640,
-                    "height": 640,
-                    "guidance_scale": 5,
-                    "ip_adapter_scale": 0.95,
-                    "controlnet_conditioning_scale": 0.95,
-                    "num_inference_steps": 30,
-                    "disable_safety_checker": True,
-                }
-            )
-    finally:
-        os.unlink(tmp_path)
+    async with httpx.AsyncClient(timeout=30) as client:
+        upload = await client.post(
+            "https://api.d-id.com/images",
+            headers={"Authorization": f"Basic {DID_API_KEY}"},
+            files={"image": ("face.jpg", buf, "image/jpeg")}
+        )
+        upload.raise_for_status()
+        face_url = upload.json()["url"]
+
+    # Выбираем случайную базовую фотку красивой модели
+    target_url = random.choice(BASE_IMAGES)
+    print(f"[INFO] Base image: {target_url}")
+
+    # Face swap — вставляем лицо пользователя в базовую фотку
+    output = await asyncio.to_thread(
+        replicate.run,
+        "codeplugtech/face-swap:d5900f9ebed33e7ae08a07f17e0d98b4ebc68ab9528a70462afc3899cfe23bab",
+        input={
+            "target_image": target_url,
+            "swap_image": face_url,
+        }
+    )
 
     if isinstance(output, list):
         item = output[0]
