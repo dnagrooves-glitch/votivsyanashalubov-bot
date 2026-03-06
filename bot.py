@@ -29,11 +29,14 @@ async def transform_to_ai(image_bytes: bytes) -> str:
                 "zsxkib/instant-id:c98b2e7a196828d00955767813b81fc05c5c9b294c670c6d147d545fed4ceecf",
                 input={
                     "image": f,
-                    "prompt": "a beautiful woman, cyberpunk style, neon purple and blue lights, futuristic city background, glowing skin, ultra detailed, 8k, cinematic",
-                    "negative_prompt": "ugly, deformed, blurry, low quality, different person, nsfw",
+                    "prompt": "a beautiful woman, same person, preserve facial features, cyberpunk style, neon purple and blue lights, futuristic city, glowing skin, ultra detailed, 8k, cinematic, masterpiece",
+                    "negative_prompt": "ugly, deformed, blurry, low quality, different person, changed face, different identity, nsfw",
                     "sdxl_weights": "protovision-xl-high-fidel",
+                    "width": 640,
+                    "height": 640,
                     "guidance_scale": 5,
                     "ip_adapter_scale": 0.8,
+                    "controlnet_conditioning_scale": 0.8,
                     "num_inference_steps": 30,
                     "disable_safety_checker": True,
                 }
