@@ -189,7 +189,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.edit_text("⏳ Шаг 2/2 — добавляю голос и движение... (~30с)")
 
         video_bytes = await create_lipsync(ai_image_url)
-        final_video = await add_watermark_to_video(video_bytes)
+        final_video = video_bytes
 
         keyboard = [[InlineKeyboardButton("🎵 Слушать трек", url=TRACK_URL)]]
 
