@@ -108,6 +108,38 @@ async def create_singing_video(image_bytes: bytes) -> bytes:
         return resp.content
 
 
+
+
+ROAST_MESSAGES = [
+    "🔍 Сканирую его активность в сети...",
+    "📱 Найдено: последний онлайн 2 минуты назад.\nВидел сообщение. Не ответил.",
+    "🤖 ИИ-анализ профиля:\n\n"
+    "— Тип: «я занят» (сидит в TikTok)\n"
+    "— Статус: притворяется что спит\n"
+    "— Уровень игнора: 94/100",
+    "📊 Статистика за 7 дней:\n\n"
+    "Просмотрел твои сторис: ✅\n"
+    "Ответил: ❌\n"
+    "Поставил лайк чужой: ✅✅✅",
+    "💀 Нейросеть говорит:\n\n"
+    "«Он не потерялся. Телефон не сломан.\n"
+    "Он просто ИИ-девушку нашёл.»",
+    "🎤 Твоя ИИ-версия разогревает голос...\n\nОн об этом пожалеет.",
+    "⚠️ ВНИМАНИЕ: видео почти готово.\n\nПодготовь попкорн.",
+]
+
+async def _roast_while_waiting(message):
+    try:
+        roast_msg = await message.reply_text(ROAST_MESSAGES[0])
+        for text in ROAST_MESSAGES[1:]:
+            await asyncio.sleep(18)
+            try:
+                await roast_msg.edit_text(text)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
 # ─── HANDLERS ───────────────────────────────────────────────────────────────
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
@@ -132,7 +164,10 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         enhanced_bytes = await enhance_face(image_bytes)
         print(f"[INFO] GFPGAN done in {time.time()-t0:.1f}s")
 
-        await msg.edit_text("⏳ Шаг 2/2 — записываю как она поёт... (~2-3 мин)")
+        await msg.edit_text("⏳ Шаг 2/2 — записываю видео... (~2-3 мин)")
+
+        # Фоновые смешные сообщения пока генерируется видео
+        asyncio.create_task(_roast_while_waiting(update.message))
 
         # Шаг 2 — OmniHuman: поёт под трек
         video_bytes = await create_singing_video(enhanced_bytes)
