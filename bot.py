@@ -57,9 +57,10 @@ async def transform_to_ai(image_bytes: bytes) -> str:
 
 
 async def convert_to_jpeg_url(image_url: str) -> str:
-    """Скачивает изображение, конвертирует в JPEG и загружает на catbox.moe"""
+    """Скачивает изображение, конвертирует в JPEG и загружает на imgur"""
     from PIL import Image
     import io
+    import base64
 
     async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.get(image_url)
@@ -67,14 +68,17 @@ async def convert_to_jpeg_url(image_url: str) -> str:
         buf = io.BytesIO()
         img.save(buf, format="JPEG", quality=95)
         buf.seek(0)
+        b64 = base64.b64encode(buf.read()).decode()
 
-        # Загружаем на catbox.moe — бесплатный хостинг картинок
+        # Загружаем на imgur
         upload = await client.post(
-            "https://catbox.moe/user/api.php",
-            data={"reqtype": "fileupload"},
-            files={"fileToUpload": ("image.jpg", buf, "image/jpeg")}
+            "https://api.imgur.com/3/image",
+            headers={"Authorization": "Client-ID 546c25a59c58ad7"},
+            json={"image": b64, "type": "base64"}
         )
-        return upload.text.strip()
+        data = upload.json()
+        print(f"[INFO] Imgur response: {data}")
+        return data["data"]["link"]
 
 
 async def create_lipsync(image_url: str) -> bytes:
