@@ -13,19 +13,6 @@ DID_API_KEY           = os.getenv("DID_API_KEY")
 CHORUS_AUDIO_URL      = os.getenv("CHORUS_AUDIO_URL")
 TRACK_URL             = os.getenv("TRACK_URL", "https://band.link/vcvotivsyanashalubov")
 
-WATERMARK_LINE1 = "vot i vsya nasha lyubov - VEEKA"
-WATERMARK_LINE2 = "slushat trek"
-
-AI_PROMPT = (
-    "portrait of a beautiful woman, same face, same features, "
-    "neon lights, futuristic, cyberpunk city background, "
-    "glowing eyes, ultra detailed, 8k, cinematic lighting, digital art"
-)
-NEGATIVE_PROMPT = (
-    "ugly, deformed, extra limbs, bad anatomy, blurry, low quality, "
-    "nsfw, different person, changed face"
-)
-
 
 async def transform_to_ai(image_bytes: bytes) -> str:
     os.environ["REPLICATE_API_TOKEN"] = REPLICATE_API_TOKEN
@@ -36,40 +23,35 @@ async def transform_to_ai(image_bytes: bytes) -> str:
 
     try:
         with open(tmp_path, "rb") as f:
+            # lucataco/instantid — лучшее сохранение лица + красивый стиль
             output = await asyncio.to_thread(
                 replicate.run,
-                "tencentarc/photomaker:ddfc2b08d209f9fa8c1eca692712918bd449f695dabb4a958da31802a9570fe4",
+                "lucataco/instantid:a59a4f56c4d1067f05e7e1f4e4c8e99c651cca07e9e0b5a7a27e7f87c5d6b8e",
                 input={
-                    "prompt": f"img, {AI_PROMPT}",
-                    "input_image": f,
-                    "negative_prompt": NEGATIVE_PROMPT,
-                    "num_outputs": 1,
+                    "image": f,
+                    "prompt": (
+                        "a beautiful woman, same person, cyberpunk style, "
+                        "neon purple and blue lights, futuristic city background, "
+                        "glowing skin patterns, ultra detailed, 8k, cinematic"
+                    ),
+                    "negative_prompt": (
+                        "ugly, deformed, blurry, low quality, "
+                        "different person, nsfw"
+                    ),
+                    "num_inference_steps": 30,
                     "guidance_scale": 5,
-                    "num_inference_steps": 20,
-                    "style_name": "Neonpunk",
                 }
             )
     finally:
         os.unlink(tmp_path)
 
-    # Replicate может вернуть FileOutput, список или строку — обрабатываем все варианты
     if isinstance(output, list):
         item = output[0]
     else:
         item = output
 
-    # FileOutput имеет метод url или его можно привести к строке
     if hasattr(item, 'url'):
         return item.url
-    elif hasattr(item, 'read'):
-        # Это file-like объект — читаем байты и загружаем на tmpfiles.org
-        data = item.read()
-        async with httpx.AsyncClient() as client:
-            resp = await client.post(
-                "https://tmpfiles.org/api/v1/upload",
-                files={"file": ("image.jpg", data, "image/jpeg")}
-            )
-            return resp.json()["data"]["url"].replace("tmpfiles.org/", "tmpfiles.org/dl/")
     else:
         return str(item)
 
@@ -123,45 +105,6 @@ async def create_lipsync(image_url: str) -> bytes:
         raise TimeoutError("D-ID не ответил за 90 секунд")
 
 
-async def add_watermark_to_video(video_bytes: bytes) -> bytes:
-    with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp_in:
-        tmp_in.write(video_bytes)
-        tmp_in_path = tmp_in.name
-
-    tmp_out_path = tmp_in_path.replace(".mp4", "_wm.mp4")
-
-    watermark = (
-        f"drawtext=text='{WATERMARK_LINE1}':"
-        f"fontcolor=white:fontsize=28:x=(w-text_w)/2:y=h-80:"
-        f"shadowcolor=black:shadowx=2:shadowy=2,"
-        f"drawtext=text='{WATERMARK_LINE2}':"
-        f"fontcolor=#aaaaff:fontsize=20:x=(w-text_w)/2:y=h-48:"
-        f"shadowcolor=black:shadowx=1:shadowy=1"
-    )
-
-    cmd = [
-        "ffmpeg", "-y",
-        "-i", tmp_in_path,
-        "-vf", watermark,
-        "-codec:a", "copy",
-        tmp_out_path
-    ]
-
-    proc = await asyncio.create_subprocess_exec(
-        *cmd,
-        stdout=asyncio.subprocess.DEVNULL,
-        stderr=asyncio.subprocess.DEVNULL
-    )
-    await proc.wait()
-
-    with open(tmp_out_path, "rb") as f:
-        result = f.read()
-
-    os.unlink(tmp_in_path)
-    os.unlink(tmp_out_path)
-    return result
-
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [[InlineKeyboardButton("🎵 Слушать трек", url=TRACK_URL)]]
     await update.message.reply_text(
@@ -189,12 +132,11 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.edit_text("⏳ Шаг 2/2 — добавляю голос и движение... (~30с)")
 
         video_bytes = await create_lipsync(ai_image_url)
-        final_video = video_bytes
 
         keyboard = [[InlineKeyboardButton("🎵 Слушать трек", url=TRACK_URL)]]
 
         await update.message.reply_video(
-            video=io.BytesIO(final_video),
+            video=io.BytesIO(video_bytes),
             caption=(
                 "Твоя ИИ-версия поёт про него 💀\n\n"
                 "Поделись и отметь *@veeka\\_chered*\n"
