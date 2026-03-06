@@ -16,8 +16,8 @@ TRACK_URL           = os.getenv("TRACK_URL", "https://band.link/vcvotivsyanashal
 TIKTOK_SOUND_URL    = "https://vt.tiktok.com/ZS9dkQxdcqNFN-RYvnX"
 
 
-# ─── SadTalker: фото + аудио → видео ──────────────────────────────────────────
-async def create_talking_video(image_bytes: bytes) -> bytes:
+# ─── ШАГ 1: GFPGAN — AI-гламур на коже (~5с) ──────────────────────────────
+async def enhance_face(image_bytes: bytes) -> bytes:
     os.environ["REPLICATE_API_TOKEN"] = REPLICATE_API_TOKEN
 
     img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
@@ -27,31 +27,55 @@ async def create_talking_video(image_bytes: bytes) -> bytes:
 
     output = await asyncio.to_thread(
         replicate.run,
-        "cjwbw/sadtalker:3aa3dac9353cc4d6bd62a8f95957bd844003b401ca4e4a9b33baa574c549d376",
+        "tencentarc/gfpgan:0fbacf7afc6817f3606c37d0f1a2028c22b04c9b7c4a4b8d47c6e7e89c74b1",
         input={
-            "source_image":  buf,
-            "driven_audio":  CHORUS_AUDIO_URL,
-            "preprocess":    "crop",
-            "still_mode":    False,
-            "use_enhancer":  True,
-            "size":          512,
-            "facerender":    "facevid2vid",
-            "pose_style":    0,
-            "exp_scale":     1.0,
+            "img":     buf,
+            "version": "v1.4",  # лучше сохраняет детали и идентичность
+            "scale":   2,
         }
     )
 
-    print(f"[INFO] SadTalker output: {output}")
+    print(f"[INFO] GFPGAN output: {output}")
+
+    url = output if isinstance(output, str) else (output.url if hasattr(output, "url") else str(output))
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.get(url)
+        resp.raise_for_status()
+        return resp.content
+
+
+# ─── ШАГ 2: OmniHuman — фото + аудио → видео с пением ──────────────────────
+async def create_singing_video(image_bytes: bytes) -> bytes:
+    os.environ["REPLICATE_API_TOKEN"] = REPLICATE_API_TOKEN
+
+    img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=95)
+    buf.seek(0)
+
+    output = await asyncio.to_thread(
+        replicate.run,
+        "bytedance/omni-human",
+        input={
+            "image": buf,
+            "audio": CHORUS_AUDIO_URL,
+        }
+    )
+
+    print(f"[INFO] OmniHuman output: {output}")
 
     if isinstance(output, list):
-        video_url = str(output[0])
-    elif hasattr(output, "url"):
-        video_url = output.url
+        item = output[0]
+    elif hasattr(output, "__iter__") and not isinstance(output, (str, bytes)):
+        item = next(iter(output))
     else:
-        video_url = str(output)
+        item = output
+
+    url = item.url if hasattr(item, "url") else str(item)
 
     async with httpx.AsyncClient(timeout=120) as client:
-        resp = await client.get(video_url)
+        resp = await client.get(url)
         resp.raise_for_status()
         return resp.content
 
@@ -66,7 +90,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = await update.message.reply_text("⏳ Создаю твою ИИ-версию... (~90с)")
+    msg = await update.message.reply_text("⏳ Шаг 1/2 — делаю твою ИИ-версию... (~10с)")
 
     try:
         t0 = time.time()
@@ -74,12 +98,17 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         photo = update.message.photo[-1]
         file = await photo.get_file()
         image_bytes = bytes(await file.download_as_bytearray())
-
         print(f"[INFO] Got photo {len(image_bytes)} bytes")
 
-        video_bytes = await create_talking_video(image_bytes)
+        # Шаг 1 — GFPGAN: AI-кожа, гламур
+        enhanced_bytes = await enhance_face(image_bytes)
+        print(f"[INFO] GFPGAN done in {time.time()-t0:.1f}s")
 
-        print(f"[INFO] Done in {time.time()-t0:.1f}s, video {len(video_bytes)} bytes")
+        await msg.edit_text("⏳ Шаг 2/2 — записываю как она поёт... (~2-3 мин)")
+
+        # Шаг 2 — OmniHuman: поёт под трек
+        video_bytes = await create_singing_video(enhanced_bytes)
+        print(f"[INFO] Total done in {time.time()-t0:.1f}s, video {len(video_bytes)} bytes")
 
         keyboard = [
             [InlineKeyboardButton("🎵 Слушать трек", url=TRACK_URL)],
