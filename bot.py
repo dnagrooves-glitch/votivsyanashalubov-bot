@@ -54,14 +54,31 @@ async def create_singing_video(image_bytes: bytes) -> bytes:
     img.save(buf, format="JPEG", quality=95)
     buf.seek(0)
 
-    output = await asyncio.to_thread(
-        replicate.run,
-        "bytedance/omni-human",
-        input={
-            "image": buf,
-            "audio": CHORUS_AUDIO_URL,
-        }
-    )
+    # Retry при rate limit (429)
+    for attempt in range(5):
+        try:
+            output = await asyncio.to_thread(
+                replicate.run,
+                "bytedance/omni-human",
+                input={
+                    "image": buf,
+                    "audio": CHORUS_AUDIO_URL,
+                }
+            )
+            break
+        except Exception as e:
+            if "429" in str(e) or "throttled" in str(e).lower():
+                wait = 15 * (attempt + 1)
+                print(f"[WARN] Rate limited, waiting {wait}s... (attempt {attempt+1})")
+                await asyncio.sleep(wait)
+                # Пересоздаём buf после первой попытки
+                buf = io.BytesIO()
+                Image.open(io.BytesIO(image_bytes)).convert("RGB").save(buf, format="JPEG", quality=95)
+                buf.seek(0)
+            else:
+                raise
+    else:
+        raise RuntimeError("Превышен лимит запросов Replicate, попробуй позже")
 
     print(f"[INFO] OmniHuman output: {output}")
 
