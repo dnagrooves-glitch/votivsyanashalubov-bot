@@ -3,7 +3,6 @@ import io
 import asyncio
 import httpx
 import replicate
-import tempfile
 import requests as req
 import time
 from PIL import Image
@@ -12,133 +11,49 @@ from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, fil
 
 TELEGRAM_TOKEN      = os.getenv("TELEGRAM_TOKEN")
 REPLICATE_API_TOKEN = os.getenv("REPLICATE_API_TOKEN")
-DID_API_KEY         = os.getenv("DID_API_KEY")
 CHORUS_AUDIO_URL    = os.getenv("CHORUS_AUDIO_URL")
 TRACK_URL           = os.getenv("TRACK_URL", "https://band.link/vcvotivsyanashalubov")
 TIKTOK_SOUND_URL    = "https://vt.tiktok.com/ZS9dkQxdcqNFN-RYvnX"
 
 
-# ─── ШАГ 1: Beauty Enhancement (img2img, сохраняет лицо) ──────────────────
-async def transform_to_ai(image_bytes: bytes) -> str:
+# ─── SadTalker: фото + аудио → видео ──────────────────────────────────────────
+async def create_talking_video(image_bytes: bytes) -> bytes:
     os.environ["REPLICATE_API_TOKEN"] = REPLICATE_API_TOKEN
 
-    # Загружаем оригинал в D-ID чтобы получить публичный URL для SDXL
     img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
     buf = io.BytesIO()
     img.save(buf, format="JPEG", quality=95)
     buf.seek(0)
 
-    async with httpx.AsyncClient(timeout=30) as client:
-        upload = await client.post(
-            "https://api.d-id.com/images",
-            headers={"Authorization": f"Basic {DID_API_KEY}"},
-            files={"image": ("face.jpg", buf, "image/jpeg")}
-        )
-        upload.raise_for_status()
-        image_url = upload.json()["url"]
-        print(f"[INFO] Uploaded original to D-ID: {image_url}")
+    output = await asyncio.to_thread(
+        replicate.run,
+        "cjwbw/sadtalker:3aa3dac9353cc4d6bd62a8f95957bd844003b401ca4e4a9b33baa574c549d376",
+        input={
+            "source_image":  buf,
+            "driven_audio":  CHORUS_AUDIO_URL,
+            "preprocess":    "crop",
+            "still_mode":    False,
+            "use_enhancer":  True,
+            "size":          512,
+            "facerender":    "facevid2vid",
+            "pose_style":    0,
+            "exp_scale":     1.0,
+        }
+    )
 
-    # SDXL img2img — добавляем гламур сохраняя лицо
-    with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
-        tmp.write(image_bytes)
-        tmp_path = tmp.name
-
-    try:
-        with open(tmp_path, "rb") as f:
-            output = await asyncio.to_thread(
-                replicate.run,
-                "stability-ai/sdxl:7762fd07cf82c948538e41f63f77d685e02b063e37e496e96eefd46c929f9bdc",
-                input={
-                    "image": f,
-                    "prompt": (
-                        "ultra glamorous woman, same person, same face, same hairstyle, "
-                        "flawless porcelain skin, glossy plump lips, dramatic eye makeup, "
-                        "long lashes, soft studio lighting, radiant glowing skin, "
-                        "high fashion editorial, vogue cover, hyper detailed, 8k photorealistic"
-                    ),
-                    "negative_prompt": (
-                        "ugly, deformed, blurry, different person, changed face, "
-                        "different hairstyle, bad anatomy, watermark, text, nsfw"
-                    ),
-                    "prompt_strength": 0.35,
-                    "num_inference_steps": 30,
-                    "guidance_scale": 7.5,
-                    "num_outputs": 1,
-                    "apply_watermark": False,
-                }
-            )
-    finally:
-        os.unlink(tmp_path)
-
-    print(f"[INFO] SDXL output: {output}")
+    print(f"[INFO] SadTalker output: {output}")
 
     if isinstance(output, list):
-        item = output[0]
+        video_url = str(output[0])
+    elif hasattr(output, "url"):
+        video_url = output.url
     else:
-        item = output
-
-    if hasattr(item, "url"):
-        return item.url
-    return str(item)
-
-
-# ─── ШАГ 2: Конвертация и загрузка в D-ID ──────────────────────────────────
-async def upload_to_did(image_url: str) -> str:
-    async with httpx.AsyncClient(timeout=60) as client:
-        resp = await client.get(image_url)
-        img = Image.open(io.BytesIO(resp.content)).convert("RGB")
-        buf = io.BytesIO()
-        img.save(buf, format="JPEG", quality=95)
-        buf.seek(0)
-
-        upload = await client.post(
-            "https://api.d-id.com/images",
-            headers={"Authorization": f"Basic {DID_API_KEY}"},
-            files={"image": ("image.jpg", buf, "image/jpeg")}
-        )
-        print(f"[INFO] D-ID upload: {upload.status_code} {upload.text}")
-        upload.raise_for_status()
-        return upload.json()["url"]
-
-
-# ─── ШАГ 3: Lipsync через D-ID ─────────────────────────────────────────────
-async def create_lipsync(image_url: str) -> bytes:
-    headers = {
-        "Authorization": f"Basic {DID_API_KEY}",
-        "Content-Type": "application/json",
-    }
-    payload = {
-        "source_url": image_url,
-        "script": {
-            "type": "audio",
-            "audio_url": CHORUS_AUDIO_URL,
-        },
-        "config": {
-            "fluent": True,
-            "pad_audio": 0.0,
-            "stitch": True,
-        },
-        "result_format": "mp4",
-    }
+        video_url = str(output)
 
     async with httpx.AsyncClient(timeout=120) as client:
-        resp = await client.post("https://api.d-id.com/talks", headers=headers, json=payload)
-        print(f"[INFO] D-ID talks: {resp.status_code} {resp.text}")
+        resp = await client.get(video_url)
         resp.raise_for_status()
-        talk_id = resp.json()["id"]
-
-        for _ in range(40):
-            await asyncio.sleep(3)
-            status_resp = await client.get(f"https://api.d-id.com/talks/{talk_id}", headers=headers)
-            data = status_resp.json()
-            status = data.get("status")
-            if status == "done":
-                video_resp = await client.get(data["result_url"], timeout=60)
-                return video_resp.content
-            elif status == "error":
-                raise RuntimeError(f"D-ID error: {data.get('error', 'unknown')}")
-
-        raise TimeoutError("D-ID не ответил за 120 секунд")
+        return resp.content
 
 
 # ─── HANDLERS ───────────────────────────────────────────────────────────────
@@ -151,35 +66,20 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = await update.message.reply_text("⏳ Шаг 1/2 — создаю твою ИИ-версию... (~45с)")
+    msg = await update.message.reply_text("⏳ Создаю твою ИИ-версию... (~90с)")
 
     try:
+        t0 = time.time()
+
         photo = update.message.photo[-1]
         file = await photo.get_file()
         image_bytes = bytes(await file.download_as_bytearray())
 
-        # Загружаем оригинал в D-ID напрямую (без AI-трансформации)
-        t1 = time.time()
+        print(f"[INFO] Got photo {len(image_bytes)} bytes")
 
-        await msg.edit_text("⏳ Создаю видео... (~30с)")
+        video_bytes = await create_talking_video(image_bytes)
 
-        img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-        buf = io.BytesIO()
-        img.save(buf, format="JPEG", quality=95)
-        buf.seek(0)
-
-        async with httpx.AsyncClient(timeout=30) as client:
-            upload = await client.post(
-                "https://api.d-id.com/images",
-                headers={"Authorization": f"Basic {DID_API_KEY}"},
-                files={"image": ("face.jpg", buf, "image/jpeg")}
-            )
-            upload.raise_for_status()
-            did_image_url = upload.json()["url"]
-            print(f"[INFO] Uploaded to D-ID: {did_image_url}")
-
-        # Шаг 3 — Lipsync на AI-картинке
-        video_bytes = await create_lipsync(did_image_url)
+        print(f"[INFO] Done in {time.time()-t0:.1f}s, video {len(video_bytes)} bytes")
 
         keyboard = [
             [InlineKeyboardButton("🎵 Слушать трек", url=TRACK_URL)],
