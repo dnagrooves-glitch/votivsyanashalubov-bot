@@ -22,32 +22,55 @@ TIKTOK_SOUND_URL    = "https://vt.tiktok.com/ZS9dkQxdcqNFN-RYvnX"
 async def transform_to_ai(image_bytes: bytes) -> str:
     os.environ["REPLICATE_API_TOKEN"] = REPLICATE_API_TOKEN
 
-    import base64
-    b64 = base64.b64encode(image_bytes).decode()
-    image_data_uri = f"data:image/jpeg;base64,{b64}"
+    # Загружаем оригинал в D-ID чтобы получить публичный URL для SDXL
+    img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=95)
+    buf.seek(0)
 
-    output = await asyncio.to_thread(
-        replicate.run,
-        "stability-ai/sdxl:7762fd07cf82c948538e41f63f77d685e02b063e37e496e96eefd46c929f9bdc",
-        input={
-            "image": image_data_uri,
-            "prompt": (
-                "ultra glamorous woman, same person, flawless porcelain skin, "
-                "glossy plump lips, dramatic eye makeup with long lashes, "
-                "soft professional studio lighting, radiant glowing skin, "
-                "high fashion editorial, vogue cover, hyper detailed, 8k photorealistic"
-            ),
-            "negative_prompt": (
-                "ugly, deformed, blurry, different person, changed face, "
-                "different hairstyle, bad anatomy, watermark, text, nsfw"
-            ),
-            "prompt_strength": 0.35,
-            "num_inference_steps": 30,
-            "guidance_scale": 7.5,
-            "num_outputs": 1,
-            "apply_watermark": False,
-        }
-    )
+    async with httpx.AsyncClient(timeout=30) as client:
+        upload = await client.post(
+            "https://api.d-id.com/images",
+            headers={"Authorization": f"Basic {DID_API_KEY}"},
+            files={"image": ("face.jpg", buf, "image/jpeg")}
+        )
+        upload.raise_for_status()
+        image_url = upload.json()["url"]
+        print(f"[INFO] Uploaded original to D-ID: {image_url}")
+
+    # SDXL img2img — добавляем гламур сохраняя лицо
+    with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+        tmp.write(image_bytes)
+        tmp_path = tmp.name
+
+    try:
+        with open(tmp_path, "rb") as f:
+            output = await asyncio.to_thread(
+                replicate.run,
+                "stability-ai/sdxl:7762fd07cf82c948538e41f63f77d685e02b063e37e496e96eefd46c929f9bdc",
+                input={
+                    "image": f,
+                    "prompt": (
+                        "ultra glamorous woman, same person, same face, same hairstyle, "
+                        "flawless porcelain skin, glossy plump lips, dramatic eye makeup, "
+                        "long lashes, soft studio lighting, radiant glowing skin, "
+                        "high fashion editorial, vogue cover, hyper detailed, 8k photorealistic"
+                    ),
+                    "negative_prompt": (
+                        "ugly, deformed, blurry, different person, changed face, "
+                        "different hairstyle, bad anatomy, watermark, text, nsfw"
+                    ),
+                    "prompt_strength": 0.35,
+                    "num_inference_steps": 30,
+                    "guidance_scale": 7.5,
+                    "num_outputs": 1,
+                    "apply_watermark": False,
+                }
+            )
+    finally:
+        os.unlink(tmp_path)
+
+    print(f"[INFO] SDXL output: {output}")
 
     if isinstance(output, list):
         item = output[0]
