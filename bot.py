@@ -6,11 +6,8 @@ import replicate
 import base64
 from PIL import Image, ImageDraw, ImageFont
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
-# ─────────────────────────────────────
-#  КОНФИГ
-# ─────────────────────────────────────
 TELEGRAM_TOKEN        = os.getenv("TELEGRAM_TOKEN")
 REPLICATE_API_TOKEN   = os.getenv("REPLICATE_API_TOKEN")
 DID_API_KEY           = os.getenv("DID_API_KEY")
@@ -22,9 +19,8 @@ WATERMARK_LINE2 = "слушать трек ↑"
 
 AI_PROMPT = (
     "portrait of a beautiful woman, same face, same features, "
-    "cyberpunk AI android, glowing neon circuit patterns on skin, "
-    "neon purple and blue light, futuristic ultra detailed, "
-    "8k, cinematic lighting, digital art, artstation quality"
+    "neon lights, futuristic, cyberpunk city background, "
+    "glowing eyes, ultra detailed, 8k, cinematic lighting, digital art"
 )
 NEGATIVE_PROMPT = (
     "ugly, deformed, extra limbs, bad anatomy, blurry, low quality, "
@@ -32,9 +28,6 @@ NEGATIVE_PROMPT = (
 )
 
 
-# ─────────────────────────────────────
-#  ШАГ 1 — AI-трансформация (Replicate)
-# ─────────────────────────────────────
 async def transform_to_ai(image_bytes: bytes) -> str:
     b64 = base64.b64encode(image_bytes).decode()
     data_uri = f"data:image/jpeg;base64,{b64}"
@@ -51,16 +44,13 @@ async def transform_to_ai(image_bytes: bytes) -> str:
             "num_outputs": 1,
             "guidance_scale": 5,
             "num_inference_steps": 20,
-            "style_name": "Cyberpunk",
+            "style_name": "Neonpunk",
         }
     )
 
     return output[0] if isinstance(output, list) else str(output)
 
 
-# ─────────────────────────────────────
-#  ШАГ 2 — Lipsync (D-ID)
-# ─────────────────────────────────────
 async def create_lipsync(image_url: str) -> bytes:
     headers = {
         "Authorization": f"Basic {DID_API_KEY}",
@@ -110,9 +100,6 @@ async def create_lipsync(image_url: str) -> bytes:
         raise TimeoutError("D-ID не ответил за 90 секунд")
 
 
-# ─────────────────────────────────────
-#  ШАГ 3 — Watermark на видео (ffmpeg)
-# ─────────────────────────────────────
 async def add_watermark_to_video(video_bytes: bytes) -> bytes:
     import tempfile
 
@@ -154,9 +141,6 @@ async def add_watermark_to_video(video_bytes: bytes) -> bytes:
     return result
 
 
-# ─────────────────────────────────────
-#  HANDLERS
-# ─────────────────────────────────────
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [[InlineKeyboardButton("🎵 Слушать трек", url=TRACK_URL)]]
     await update.message.reply_text(
@@ -174,25 +158,18 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     try:
-        # Скачиваем фото — telegram-bot v21 API
         photo = update.message.photo[-1]
         file = await photo.get_file()
         image_bytes = await file.download_as_bytearray()
 
-        # Шаг 1 — AI-трансформация
         ai_image_url = await transform_to_ai(bytes(image_bytes))
 
         await msg.edit_text("⏳ Шаг 2/2 — добавляю голос и движение... (~30с)")
 
-        # Шаг 2 — Lipsync
         video_bytes = await create_lipsync(ai_image_url)
-
-        # Шаг 3 — Watermark
         final_video = await add_watermark_to_video(video_bytes)
 
-        keyboard = [
-            [InlineKeyboardButton("🎵 Слушать трек", url=TRACK_URL)],
-        ]
+        keyboard = [[InlineKeyboardButton("🎵 Слушать трек", url=TRACK_URL)]]
 
         await update.message.reply_video(
             video=io.BytesIO(final_video),
@@ -213,7 +190,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Что-то пошло не так 😔\n"
             "Попробуй другое фото — лучше всего портрет анфас с чётким лицом."
         )
-        print(f"[ERROR] {e}")
+        print(f"[ERROR] {type(e).__name__}: {e}")
 
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -222,9 +199,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-# ─────────────────────────────────────
-#  MAIN
-# ─────────────────────────────────────
 def main():
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
