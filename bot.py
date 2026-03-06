@@ -107,6 +107,7 @@ async def create_lipsync(image_url: str) -> bytes:
             headers=headers,
             json=payload
         )
+        print(f"[INFO] D-ID response: {resp.status_code} {resp.text}")
         resp.raise_for_status()
         talk_id = resp.json()["id"]
 
