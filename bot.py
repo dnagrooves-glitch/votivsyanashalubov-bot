@@ -80,8 +80,9 @@ async def create_singing_video(image_bytes: bytes) -> bytes:
     else:
         raise RuntimeError("Превышен лимит запросов Replicate, попробуй позже")
 
-    print(f"[INFO] OmniHuman output: {output}")
+    print(f"[INFO] OmniHuman output: {output}, type: {type(output)}")
 
+    # Извлекаем URL из любого формата вывода
     if isinstance(output, list):
         item = output[0]
     elif hasattr(output, "__iter__") and not isinstance(output, (str, bytes)):
@@ -89,8 +90,20 @@ async def create_singing_video(image_bytes: bytes) -> bytes:
     else:
         item = output
 
-    url = item.url if hasattr(item, "url") else str(item)
+    if hasattr(item, "url"):
+        url = item.url
+    elif isinstance(item, str) and item.startswith("http"):
+        url = item
+    else:
+        # FileOutput или другой объект — читаем напрямую
+        print(f"[INFO] Reading output directly, type: {type(item)}")
+        if hasattr(item, "read"):
+            return item.read()
+        url = str(item)
+        if not url.startswith("http"):
+            raise RuntimeError(f"Unexpected output format: {type(item)}: {url[:100]}")
 
+    print(f"[INFO] Downloading video from: {url}")
     async with httpx.AsyncClient(timeout=120) as client:
         resp = await client.get(url)
         resp.raise_for_status()
