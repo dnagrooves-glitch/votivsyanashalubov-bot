@@ -4,16 +4,21 @@ import asyncio
 import httpx
 import replicate
 import tempfile
+import requests as req
+import time
+from PIL import Image
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
-TELEGRAM_TOKEN        = os.getenv("TELEGRAM_TOKEN")
-REPLICATE_API_TOKEN   = os.getenv("REPLICATE_API_TOKEN")
-DID_API_KEY           = os.getenv("DID_API_KEY")
-CHORUS_AUDIO_URL      = os.getenv("CHORUS_AUDIO_URL")
-TRACK_URL             = os.getenv("TRACK_URL", "https://band.link/vcvotivsyanashalubov")
+TELEGRAM_TOKEN      = os.getenv("TELEGRAM_TOKEN")
+REPLICATE_API_TOKEN = os.getenv("REPLICATE_API_TOKEN")
+DID_API_KEY         = os.getenv("DID_API_KEY")
+CHORUS_AUDIO_URL    = os.getenv("CHORUS_AUDIO_URL")
+TRACK_URL           = os.getenv("TRACK_URL", "https://band.link/vcvotivsyanashalubov")
+TIKTOK_SOUND_URL    = "https://vt.tiktok.com/ZS9dkQxdcqNFN-RYvnX"
 
 
+# ─── ШАГ 1: AI-трансформация (InstantID) ───────────────────────────────────
 async def transform_to_ai(image_bytes: bytes) -> str:
     os.environ["REPLICATE_API_TOKEN"] = REPLICATE_API_TOKEN
 
@@ -23,7 +28,6 @@ async def transform_to_ai(image_bytes: bytes) -> str:
 
     try:
         with open(tmp_path, "rb") as f:
-            # lucataco/instantid — лучшее сохранение лица + красивый стиль
             output = await asyncio.to_thread(
                 replicate.run,
                 "zsxkib/instant-id:c98b2e7a196828d00955767813b81fc05c5c9b294c670c6d147d545fed4ceecf",
@@ -35,8 +39,8 @@ async def transform_to_ai(image_bytes: bytes) -> str:
                     "width": 640,
                     "height": 640,
                     "guidance_scale": 5,
-                    "ip_adapter_scale": 0.8,
-                    "controlnet_conditioning_scale": 0.8,
+                    "ip_adapter_scale": 0.9,
+                    "controlnet_conditioning_scale": 0.9,
                     "num_inference_steps": 30,
                     "disable_safety_checker": True,
                 }
@@ -51,40 +55,34 @@ async def transform_to_ai(image_bytes: bytes) -> str:
 
     if hasattr(item, 'url'):
         return item.url
-    else:
-        return str(item)
+    return str(item)
 
 
-
-async def convert_to_jpeg_url(image_url: str) -> str:
-    """Скачивает изображение, конвертирует в JPEG и загружает в D-ID"""
-    from PIL import Image
-    import io
+# ─── ШАГ 2: Загрузка оригинала в D-ID ──────────────────────────────────────
+async def upload_to_did(image_bytes: bytes) -> str:
+    """Загружает оригинальное фото в D-ID и возвращает их URL"""
+    img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=95)
+    buf.seek(0)
 
     async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.get(image_url)
-        img = Image.open(io.BytesIO(resp.content)).convert("RGB")
-        buf = io.BytesIO()
-        img.save(buf, format="JPEG", quality=95)
-        buf.seek(0)
-
-        # Загружаем напрямую в D-ID
         upload = await client.post(
             "https://api.d-id.com/images",
             headers={"Authorization": f"Basic {DID_API_KEY}"},
             files={"image": ("image.jpg", buf, "image/jpeg")}
         )
-        print(f"[INFO] D-ID upload response: {upload.status_code} {upload.text}")
+        print(f"[INFO] D-ID upload: {upload.status_code} {upload.text}")
         upload.raise_for_status()
         return upload.json()["url"]
 
 
+# ─── ШАГ 3: Lipsync через D-ID ─────────────────────────────────────────────
 async def create_lipsync(image_url: str) -> bytes:
     headers = {
         "Authorization": f"Basic {DID_API_KEY}",
         "Content-Type": "application/json",
     }
-
     payload = {
         "source_url": image_url,
         "script": {
@@ -100,40 +98,33 @@ async def create_lipsync(image_url: str) -> bytes:
     }
 
     async with httpx.AsyncClient(timeout=120) as client:
-        resp = await client.post(
-            "https://api.d-id.com/talks",
-            headers=headers,
-            json=payload
-        )
-        print(f"[INFO] D-ID response: {resp.status_code} {resp.text}")
+        resp = await client.post("https://api.d-id.com/talks", headers=headers, json=payload)
+        print(f"[INFO] D-ID talks: {resp.status_code} {resp.text}")
         resp.raise_for_status()
         talk_id = resp.json()["id"]
 
-        for attempt in range(30):
+        for _ in range(40):
             await asyncio.sleep(3)
-            status_resp = await client.get(
-                f"https://api.d-id.com/talks/{talk_id}",
-                headers=headers
-            )
+            status_resp = await client.get(f"https://api.d-id.com/talks/{talk_id}", headers=headers)
             data = status_resp.json()
             status = data.get("status")
-
             if status == "done":
-                video_url = data["result_url"]
-                video_resp = await client.get(video_url, timeout=60)
+                video_resp = await client.get(data["result_url"], timeout=60)
                 return video_resp.content
-
             elif status == "error":
                 raise RuntimeError(f"D-ID error: {data.get('error', 'unknown')}")
 
-        raise TimeoutError("D-ID не ответил за 90 секунд")
+        raise TimeoutError("D-ID не ответил за 120 секунд")
 
 
+# ─── HANDLERS ───────────────────────────────────────────────────────────────
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [[InlineKeyboardButton("🎵 Слушать трек", url=TRACK_URL)]]
+    keyboard = [
+        [InlineKeyboardButton("🎵 Слушать трек", url=TRACK_URL)],
+        [InlineKeyboardButton("🎵 Звук в TikTok", url=TIKTOK_SOUND_URL)],
+    ]
     await update.message.reply_text(
-        "Он в сети — общается с ИИ.\n"
-        "Ну и ладно.\n\n"
+        "Он в сети — общается с ИИ.\nНу и ладно.\n\n"
         "Отправь своё фото — получи себя в виде ИИ-девушки "
         "которая поёт про него 🤖🎵",
         reply_markup=InlineKeyboardMarkup(keyboard)
@@ -141,36 +132,46 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = await update.message.reply_text(
-        "⏳ Шаг 1/2 — создаю твою ИИ-версию..."
-    )
+    msg = await update.message.reply_text("⏳ Шаг 1/2 — создаю твою ИИ-версию... (~45с)")
 
     try:
         photo = update.message.photo[-1]
         file = await photo.get_file()
-        image_bytes = await file.download_as_bytearray()
+        image_bytes = bytes(await file.download_as_bytearray())
 
-        ai_image_url = await transform_to_ai(bytes(image_bytes))
-        print(f"[INFO] AI image URL: {ai_image_url}")
+        # Шаг 1 — AI трансформация
+        ai_image_url = await transform_to_ai(image_bytes)
+        print(f"[INFO] AI image: {ai_image_url}")
 
-        # Конвертируем webp в jpeg для D-ID
-        ai_image_url = await convert_to_jpeg_url(ai_image_url)
-        print(f"[INFO] JPEG image URL: {ai_image_url}")
+        await msg.edit_text("⏳ Шаг 2/2 — накладываю голос... (~30с)")
 
-        await msg.edit_text("⏳ Шаг 2/2 — добавляю голос и движение... (~30с)")
+        # Шаг 2 — Загружаем ОРИГИНАЛ в D-ID (не AI версию — для лучшего липсинка)
+        original_did_url = await upload_to_did(image_bytes)
 
-        video_bytes = await create_lipsync(ai_image_url)
+        # Шаг 3 — Lipsync на оригинале
+        video_bytes = await create_lipsync(original_did_url)
 
-        keyboard = [[InlineKeyboardButton("🎵 Слушать трек", url=TRACK_URL)]]
+        keyboard = [
+            [InlineKeyboardButton("🎵 Слушать трек", url=TRACK_URL)],
+            [InlineKeyboardButton("📱 Снять видео с этим звуком в TikTok", url=TIKTOK_SOUND_URL)],
+        ]
 
+        # Отправляем AI-картинку
+        ai_resp = await httpx.AsyncClient(timeout=30).get(ai_image_url)
+        await update.message.reply_photo(
+            photo=io.BytesIO(ai_resp.content),
+            caption="Твоя ИИ-версия 🤖✨"
+        )
+
+        # Отправляем видео с липсинком
         await update.message.reply_video(
             video=io.BytesIO(video_bytes),
             caption=(
                 "Твоя ИИ-версия поёт про него 💀\n\n"
-                "Поделись и отметь *@veeka\\_chered*\n"
-                "#яИИдевушка"
+                "Сохрани → открой TikTok → найди звук *«вот и вся наша любовь — VEÉKA»*\n"
+                "Отметь *@veeka\\_chered* \\#яИИдевушка"
             ),
-            parse_mode="Markdown",
+            parse_mode="MarkdownV2",
             reply_markup=InlineKeyboardMarkup(keyboard),
             supports_streaming=True,
         )
@@ -191,16 +192,13 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-import time
-import requests as req
-
 def main():
-    # Сбрасываем webhook и ждём освобождения соединения
     try:
         req.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/deleteWebhook?drop_pending_updates=true", timeout=10)
         time.sleep(3)
     except:
         pass
+
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
