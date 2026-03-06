@@ -55,6 +55,28 @@ async def transform_to_ai(image_bytes: bytes) -> str:
         return str(item)
 
 
+
+async def convert_to_jpeg_url(image_url: str) -> str:
+    """Скачивает изображение, конвертирует в JPEG и загружает на catbox.moe"""
+    from PIL import Image
+    import io
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.get(image_url)
+        img = Image.open(io.BytesIO(resp.content)).convert("RGB")
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=95)
+        buf.seek(0)
+
+        # Загружаем на catbox.moe — бесплатный хостинг картинок
+        upload = await client.post(
+            "https://catbox.moe/user/api.php",
+            data={"reqtype": "fileupload"},
+            files={"fileToUpload": ("image.jpg", buf, "image/jpeg")}
+        )
+        return upload.text.strip()
+
+
 async def create_lipsync(image_url: str) -> bytes:
     headers = {
         "Authorization": f"Basic {DID_API_KEY}",
@@ -127,6 +149,10 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         ai_image_url = await transform_to_ai(bytes(image_bytes))
         print(f"[INFO] AI image URL: {ai_image_url}")
+
+        # Конвертируем webp в jpeg для D-ID
+        ai_image_url = await convert_to_jpeg_url(ai_image_url)
+        print(f"[INFO] JPEG image URL: {ai_image_url}")
 
         await msg.edit_text("⏳ Шаг 2/2 — добавляю голос и движение... (~30с)")
 
