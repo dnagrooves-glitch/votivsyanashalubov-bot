@@ -3,7 +3,6 @@ import io
 import asyncio
 import httpx
 import replicate
-import base64
 import tempfile
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
@@ -14,7 +13,7 @@ DID_API_KEY           = os.getenv("DID_API_KEY")
 CHORUS_AUDIO_URL      = os.getenv("CHORUS_AUDIO_URL")
 TRACK_URL             = os.getenv("TRACK_URL", "https://band.link/vcvotivsyanashalubov")
 
-WATERMARK_LINE1 = "vot i vsya nasha lyubov • VEEKA"
+WATERMARK_LINE1 = "vot i vsya nasha lyubov - VEEKA"
 WATERMARK_LINE2 = "slushat trek"
 
 AI_PROMPT = (
@@ -53,7 +52,26 @@ async def transform_to_ai(image_bytes: bytes) -> str:
     finally:
         os.unlink(tmp_path)
 
-    return output[0] if isinstance(output, list) else str(output)
+    # Replicate может вернуть FileOutput, список или строку — обрабатываем все варианты
+    if isinstance(output, list):
+        item = output[0]
+    else:
+        item = output
+
+    # FileOutput имеет метод url или его можно привести к строке
+    if hasattr(item, 'url'):
+        return item.url
+    elif hasattr(item, 'read'):
+        # Это file-like объект — читаем байты и загружаем на tmpfiles.org
+        data = item.read()
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                "https://tmpfiles.org/api/v1/upload",
+                files={"file": ("image.jpg", data, "image/jpeg")}
+            )
+            return resp.json()["data"]["url"].replace("tmpfiles.org/", "tmpfiles.org/dl/")
+    else:
+        return str(item)
 
 
 async def create_lipsync(image_url: str) -> bytes:
@@ -166,6 +184,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         image_bytes = await file.download_as_bytearray()
 
         ai_image_url = await transform_to_ai(bytes(image_bytes))
+        print(f"[INFO] AI image URL: {ai_image_url}")
 
         await msg.edit_text("⏳ Шаг 2/2 — добавляю голос и движение... (~30с)")
 
