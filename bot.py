@@ -99,6 +99,8 @@ async def create_singing_video(image_bytes: bytes) -> bytes:
         print(f"[INFO] Reading output directly, type: {type(item)}")
         if hasattr(item, "read"):
             return item.read()
+        if isinstance(item, bytes):
+            return item
         url = str(item)
         if not url.startswith("http"):
             raise RuntimeError(f"Unexpected output format: {type(item)}: {url[:100]}")
