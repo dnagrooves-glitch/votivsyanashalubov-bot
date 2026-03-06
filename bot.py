@@ -18,47 +18,34 @@ TRACK_URL           = os.getenv("TRACK_URL", "https://band.link/vcvotivsyanashal
 TIKTOK_SOUND_URL    = "https://vt.tiktok.com/ZS9dkQxdcqNFN-RYvnX"
 
 
-import random
-
-# Базовые фото красивых AI-моделей для face swap
-# Анфас, хорошее освещение — лучший результат для face swap
-BASE_IMAGES = [
-    "https://replicate.delivery/pbxt/JkUYWp60oNwz1SF9AJvJPv7upLqucTyaeCxQ07qZGijlDKxt/face_swap_09.jpg",
-    "https://images.unsplash.com/photo-1529626455594-4ff0802cfb7e?w=640&h=896&fit=crop&crop=face",
-    "https://images.unsplash.com/photo-1524504388940-b1c1722653e1?w=640&h=896&fit=crop&crop=face",
-    "https://images.unsplash.com/photo-1488716820095-cbe80883c496?w=640&h=896&fit=crop&crop=face",
-]
-
-# ─── ШАГ 1: Face Swap (быстро, лицо сохраняется 100%) ──────────────────────
+# ─── ШАГ 1: Beauty Enhancement (img2img, сохраняет лицо) ──────────────────
 async def transform_to_ai(image_bytes: bytes) -> str:
     os.environ["REPLICATE_API_TOKEN"] = REPLICATE_API_TOKEN
 
-    # Загружаем фото пользователя в D-ID чтобы получить публичный URL
-    img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-    buf = io.BytesIO()
-    img.save(buf, format="JPEG", quality=95)
-    buf.seek(0)
+    import base64
+    b64 = base64.b64encode(image_bytes).decode()
+    image_data_uri = f"data:image/jpeg;base64,{b64}"
 
-    async with httpx.AsyncClient(timeout=30) as client:
-        upload = await client.post(
-            "https://api.d-id.com/images",
-            headers={"Authorization": f"Basic {DID_API_KEY}"},
-            files={"image": ("face.jpg", buf, "image/jpeg")}
-        )
-        upload.raise_for_status()
-        face_url = upload.json()["url"]
-
-    # Выбираем случайную базовую фотку красивой модели
-    target_url = random.choice(BASE_IMAGES)
-    print(f"[INFO] Base image: {target_url}")
-
-    # Face swap — вставляем лицо пользователя в базовую фотку
     output = await asyncio.to_thread(
         replicate.run,
-        "codeplugtech/face-swap:d5900f9ebed33e7ae08a07f17e0d98b4ebc68ab9528a70462afc3899cfe23bab",
+        "stability-ai/sdxl:7762fd07cf82c948538e41f63f77d685e02b063e37e496e96eefd46c929f9bdc",
         input={
-            "target_image": target_url,
-            "swap_image": face_url,
+            "image": image_data_uri,
+            "prompt": (
+                "ultra glamorous woman, same person, flawless porcelain skin, "
+                "glossy plump lips, dramatic eye makeup with long lashes, "
+                "soft professional studio lighting, radiant glowing skin, "
+                "high fashion editorial, vogue cover, hyper detailed, 8k photorealistic"
+            ),
+            "negative_prompt": (
+                "ugly, deformed, blurry, different person, changed face, "
+                "different hairstyle, bad anatomy, watermark, text, nsfw"
+            ),
+            "prompt_strength": 0.35,
+            "num_inference_steps": 30,
+            "guidance_scale": 7.5,
+            "num_outputs": 1,
+            "apply_watermark": False,
         }
     )
 
@@ -67,7 +54,7 @@ async def transform_to_ai(image_bytes: bytes) -> str:
     else:
         item = output
 
-    if hasattr(item, 'url'):
+    if hasattr(item, "url"):
         return item.url
     return str(item)
 
