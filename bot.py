@@ -33,14 +33,14 @@ async def transform_to_ai(image_bytes: bytes) -> str:
                 "zsxkib/instant-id:c98b2e7a196828d00955767813b81fc05c5c9b294c670c6d147d545fed4ceecf",
                 input={
                     "image": f,
-                    "prompt": "a beautiful woman, same person, preserve facial features, cyberpunk style, neon purple and blue lights, futuristic city, glowing skin, ultra detailed, 8k, cinematic, masterpiece",
-                    "negative_prompt": "ugly, deformed, blurry, low quality, different person, changed face, different identity, nsfw",
-                    "sdxl_weights": "protovision-xl-high-fidel",
+                    "prompt": "a stunning AI influencer woman, same person, preserve facial features, hyper realistic, perfect skin, glossy lips, long lashes, soft studio lighting, luxurious fashion, elegant pose, ultra detailed, 8k, vogue magazine cover, photorealistic masterpiece",
+                    "negative_prompt": "ugly, deformed, blurry, low quality, different person, changed face, cartoon, anime, painting, drawing, illustration, nsfw",
+                    "sdxl_weights": "stable-diffusion-xl-base-1.0",
                     "width": 640,
                     "height": 640,
                     "guidance_scale": 5,
-                    "ip_adapter_scale": 0.9,
-                    "controlnet_conditioning_scale": 0.9,
+                    "ip_adapter_scale": 0.95,
+                    "controlnet_conditioning_scale": 0.95,
                     "num_inference_steps": 30,
                     "disable_safety_checker": True,
                 }
@@ -58,15 +58,15 @@ async def transform_to_ai(image_bytes: bytes) -> str:
     return str(item)
 
 
-# ─── ШАГ 2: Загрузка оригинала в D-ID ──────────────────────────────────────
-async def upload_to_did(image_bytes: bytes) -> str:
-    """Загружает оригинальное фото в D-ID и возвращает их URL"""
-    img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-    buf = io.BytesIO()
-    img.save(buf, format="JPEG", quality=95)
-    buf.seek(0)
+# ─── ШАГ 2: Конвертация и загрузка в D-ID ──────────────────────────────────
+async def upload_to_did(image_url: str) -> str:
+    async with httpx.AsyncClient(timeout=60) as client:
+        resp = await client.get(image_url)
+        img = Image.open(io.BytesIO(resp.content)).convert("RGB")
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=95)
+        buf.seek(0)
 
-    async with httpx.AsyncClient(timeout=30) as client:
         upload = await client.post(
             "https://api.d-id.com/images",
             headers={"Authorization": f"Basic {DID_API_KEY}"},
@@ -119,15 +119,10 @@ async def create_lipsync(image_url: str) -> bytes:
 
 # ─── HANDLERS ───────────────────────────────────────────────────────────────
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [
-        [InlineKeyboardButton("🎵 Слушать трек", url=TRACK_URL)],
-        [InlineKeyboardButton("🎵 Звук в TikTok", url=TIKTOK_SOUND_URL)],
-    ]
     await update.message.reply_text(
         "Он в сети — общается с ИИ.\nНу и ладно.\n\n"
         "Отправь своё фото — получи себя в виде ИИ-девушки "
-        "которая поёт про него 🤖🎵",
-        reply_markup=InlineKeyboardMarkup(keyboard)
+        "которая поёт про него 🤖🎵"
     )
 
 
@@ -140,38 +135,30 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         image_bytes = bytes(await file.download_as_bytearray())
 
         # Шаг 1 — AI трансформация
+        t1 = time.time()
         ai_image_url = await transform_to_ai(image_bytes)
-        print(f"[INFO] AI image: {ai_image_url}")
+        print(f"[INFO] AI image ({time.time()-t1:.1f}s): {ai_image_url}")
 
         await msg.edit_text("⏳ Шаг 2/2 — накладываю голос... (~30с)")
 
-        # Шаг 2 — Загружаем ОРИГИНАЛ в D-ID (не AI версию — для лучшего липсинка)
-        original_did_url = await upload_to_did(image_bytes)
+        # Шаг 2 — Загружаем AI-картинку в D-ID
+        did_image_url = await upload_to_did(ai_image_url)
 
-        # Шаг 3 — Lipsync на оригинале
-        video_bytes = await create_lipsync(original_did_url)
+        # Шаг 3 — Lipsync на AI-картинке
+        video_bytes = await create_lipsync(did_image_url)
 
         keyboard = [
             [InlineKeyboardButton("🎵 Слушать трек", url=TRACK_URL)],
-            [InlineKeyboardButton("📱 Снять видео с этим звуком в TikTok", url=TIKTOK_SOUND_URL)],
+            [InlineKeyboardButton("📱 Снять видео под этот звук в TikTok", url=TIKTOK_SOUND_URL)],
         ]
 
-        # Отправляем AI-картинку
-        ai_resp = await httpx.AsyncClient(timeout=30).get(ai_image_url)
-        await update.message.reply_photo(
-            photo=io.BytesIO(ai_resp.content),
-            caption="Твоя ИИ-версия 🤖✨"
-        )
-
-        # Отправляем видео с липсинком
         await update.message.reply_video(
             video=io.BytesIO(video_bytes),
             caption=(
                 "Твоя ИИ-версия поёт про него 💀\n\n"
-                "Сохрани → открой TikTok → найди звук *«вот и вся наша любовь — VEÉKA»*\n"
-                "Отметь *@veeka\\_chered* \\#яИИдевушка"
+                "Сохрани видео → нажми кнопку ниже → снимешь ролик под этот звук в TikTok 👇\n\n"
+                "Отметь @veeka_chered и #яИИдевушка"
             ),
-            parse_mode="MarkdownV2",
             reply_markup=InlineKeyboardMarkup(keyboard),
             supports_streaming=True,
         )
