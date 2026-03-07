@@ -138,8 +138,16 @@ async def create_singing_video(image_bytes: bytes) -> bytes:
 # ─── НОВОЕ 3: Наложение текста на видео через ffmpeg ─────────────────────────
 async def add_text_overlay(video_bytes: bytes) -> bytes:
     import tempfile, subprocess, shutil
-    if not shutil.which("ffmpeg"):
-        print("[WARN] ffmpeg not found, skipping text overlay")
+    # Пробуем системный ffmpeg, если нет — берём из imageio-ffmpeg
+    ffmpeg_path = shutil.which("ffmpeg")
+    if not ffmpeg_path:
+        try:
+            import imageio_ffmpeg
+            ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
+        except Exception:
+            pass
+    if not ffmpeg_path:
+        print("[WARN] ffmpeg not found anywhere, skipping text overlay")
         return video_bytes
 
     with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as fin:
@@ -164,7 +172,7 @@ async def add_text_overlay(video_bytes: bytes) -> bytes:
         f":x=(w-text_w)/2:y=h-80"
     )
 
-    cmd = ["ffmpeg", "-y", "-i", input_path, "-vf", vf,
+    cmd = [ffmpeg_path, "-y", "-i", input_path, "-vf", vf,
            "-c:v", "libx264", "-c:a", "copy", "-preset", "fast", output_path]
 
     try:
@@ -299,13 +307,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 def main():
-    # Устанавливаем ffmpeg если его нет
-    import shutil, subprocess
-    if not shutil.which("ffmpeg"):
-        print("[INFO] Installing ffmpeg...")
-        subprocess.run(["apt-get", "install", "-y", "ffmpeg", "fonts-dejavu"], capture_output=True)
-        print("[INFO] ffmpeg installed" if shutil.which("ffmpeg") else "[WARN] ffmpeg install failed")
-
     for attempt in range(5):
         try:
             req.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/deleteWebhook?drop_pending_updates=true", timeout=10)
