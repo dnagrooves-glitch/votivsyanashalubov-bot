@@ -14,6 +14,26 @@ REPLICATE_API_TOKEN = os.getenv("REPLICATE_API_TOKEN")
 CHORUS_AUDIO_URL    = os.getenv("CHORUS_AUDIO_URL")
 TRACK_URL           = os.getenv("TRACK_URL", "https://band.link/vcvotivsyanashalubov")
 TIKTOK_SOUND_URL    = "https://vt.tiktok.com/ZS9dkQxdcqNFN-RYvnX"
+ADMIN_CHAT_ID       = os.getenv("ADMIN_CHAT_ID")  # твой Telegram chat_id для алертов
+
+
+# ─── АЛЕРТ АДМИНИСТРАТОРУ ───────────────────────────────────────────────────
+async def notify_admin(app, user, error: Exception, stage: str):
+    """Отправляет алерт в чат администратора при ошибке."""
+    if not ADMIN_CHAT_ID:
+        return
+    try:
+        username = f"@{user.username}" if user.username else f"id:{user.id}"
+        name = user.full_name or "—"
+        text = (
+            f"🚨 Ошибка у пользователя\n\n"
+            f"👤 {name} ({username})\n"
+            f"📍 Этап: {stage}\n"
+            f"❌ {type(error).__name__}: {str(error)[:300]}"
+        )
+        await app.bot.send_message(chat_id=ADMIN_CHAT_ID, text=text)
+    except Exception as notify_err:
+        print(f"[WARN] Could not notify admin: {notify_err}")
 
 
 # ─── ШАГ 1: GFPGAN — AI-гламур на коже (~5с) ──────────────────────────────
@@ -37,77 +57,143 @@ async def enhance_face(image_bytes: bytes) -> bytes:
 
     print(f"[INFO] GFPGAN output: {output}")
 
-    url = output if isinstance(output, str) else (output.url if hasattr(output, "url") else str(output))
+    # Возвращаем URL напрямую — передадим в WaveSpeed без лишней загрузки
+    image_url = output if isinstance(output, str) else (output.url if hasattr(output, "url") else str(output))
+    return image_url
+
+
+# ─── ШАГ 2: OmniHuman via WaveSpeed — фото + аудио → видео с пением ─────────
+async def create_singing_video(image_url: str) -> bytes:
+    """
+    Отправляет задачу в WaveSpeed API (bytedance/avatar-omni-human-1.5),
+    поллит результат и возвращает байты видео.
+    """
+    WAVESPEED_API_KEY = os.getenv("WAVESPEED_API_KEY")
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {WAVESPEED_API_KEY}",
+    }
+
+    # 1. Отправляем задачу
+    payload = {
+        "image": image_url,
+        "audio": CHORUS_AUDIO_URL,
+        "enable_base64_output": False,
+    }
 
     async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.get(url)
+        resp = await client.post(
+            "https://api.wavespeed.ai/api/v3/bytedance/avatar-omni-human-1.5",
+            headers=headers,
+            json=payload,
+        )
         resp.raise_for_status()
-        return resp.content
+        data = resp.json()
 
+    request_id = data.get("data", {}).get("id") or data.get("id")
+    if not request_id:
+        raise RuntimeError(f"WaveSpeed: не получили request_id. Ответ: {data}")
+    print(f"[INFO] WaveSpeed task submitted: {request_id}")
 
-# ─── ШАГ 2: OmniHuman — фото + аудио → видео с пением ──────────────────────
-async def create_singing_video(image_bytes: bytes) -> bytes:
-    os.environ["REPLICATE_API_TOKEN"] = REPLICATE_API_TOKEN
+    # 2. Поллим результат (максимум 5 минут)
+    result_url_api = f"https://api.wavespeed.ai/api/v3/predictions/{request_id}/result"
+    for attempt in range(60):  # 60 × 5с = 5 минут
+        await asyncio.sleep(5)
+        async with httpx.AsyncClient(timeout=15) as client:
+            r = await client.get(result_url_api, headers=headers)
+            r.raise_for_status()
+            result = r.json()
 
-    img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-    buf = io.BytesIO()
-    img.save(buf, format="JPEG", quality=95)
-    buf.seek(0)
+        status = result.get("data", {}).get("status") or result.get("status")
+        print(f"[INFO] WaveSpeed poll {attempt+1}: status={status}")
 
-    # Retry при rate limit (429)
-    for attempt in range(5):
-        try:
-            output = await asyncio.to_thread(
-                replicate.run,
-                "bytedance/omni-human",
-                input={
-                    "image": buf,
-                    "audio": CHORUS_AUDIO_URL,
-                }
-            )
+        if status == "completed":
+            outputs = result.get("data", {}).get("outputs") or result.get("outputs", [])
+            video_url = outputs[0] if outputs else None
+            if not video_url:
+                raise RuntimeError(f"WaveSpeed: статус completed, но outputs пустой: {result}")
+            print(f"[INFO] WaveSpeed video URL: {video_url}")
             break
-        except Exception as e:
-            if "429" in str(e) or "throttled" in str(e).lower():
-                wait = 15 * (attempt + 1)
-                print(f"[WARN] Rate limited, waiting {wait}s... (attempt {attempt+1})")
-                await asyncio.sleep(wait)
-                # Пересоздаём buf после первой попытки
-                buf = io.BytesIO()
-                Image.open(io.BytesIO(image_bytes)).convert("RGB").save(buf, format="JPEG", quality=95)
-                buf.seek(0)
-            else:
-                raise
+        elif status in ("failed", "canceled"):
+            raise RuntimeError(f"WaveSpeed: задача завершилась со статусом {status}. {result}")
     else:
-        raise RuntimeError("Превышен лимит запросов Replicate, попробуй позже")
+        raise RuntimeError("WaveSpeed: таймаут 5 минут, видео не готово")
 
-    print(f"[INFO] OmniHuman raw output: {output}, type: {type(output)}")
-
-    # Достаём URL — FileOutput имеет атрибут .url
-    if hasattr(output, "url"):
-        url = output.url
-    elif isinstance(output, list) and hasattr(output[0], "url"):
-        url = output[0].url
-    elif isinstance(output, list) and isinstance(output[0], str):
-        url = output[0]
-    elif isinstance(output, str):
-        url = output
-    else:
-        # Крайний случай: ищем URL в строковом представлении
-        s = str(output)
-        import re
-        m = re.search(r'https://\S+\.mp4', s)
-        if m:
-            url = m.group(0)
-        else:
-            raise RuntimeError(f"Cannot extract URL from: {type(output)}: {s[:200]}")
-
-    print(f"[INFO] Downloading video from: {url}")
+    # 3. Скачиваем видео
     async with httpx.AsyncClient(timeout=120) as client:
-        resp = await client.get(url)
+        resp = await client.get(video_url)
         resp.raise_for_status()
         return resp.content
 
 
+
+
+# ─── НАЛОЖЕНИЕ ТЕКСТА НА ВИДЕО ───────────────────────────────────────────────
+async def add_text_overlay(video_bytes: bytes) -> bytes:
+    """
+    Накладывает на видео два текста через ffmpeg:
+    - сверху: «это ИИ-версия» (первые 3 секунды)
+    - снизу: «@veeka_ai_bot в Telegram» (всё видео)
+    Если ffmpeg недоступен — возвращает оригинал без изменений.
+    """
+    import tempfile, subprocess, shutil
+    if not shutil.which("ffmpeg"):
+        print("[WARN] ffmpeg not found, skipping text overlay")
+        return video_bytes
+
+    with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as fin:
+        fin.write(video_bytes)
+        input_path = fin.name
+
+    output_path = input_path.replace(".mp4", "_out.mp4")
+
+    font = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+    if not os.path.exists(font):
+        font = ""
+    font_arg = f":fontfile={font}" if font else ""
+
+    top_text    = "моя ИИ-версия"
+    bottom_text = "Сделать твою версию:\n @veeka_ai_bot в Telegram"
+
+    vf = (
+        f"drawtext=text='{top_text}'{font_arg}"
+        f":fontsize=52:fontcolor=white:borderw=3:bordercolor=black"
+        f":x=(w-text_w)/2:y=80"
+        f":enable='lte(t,3)',"
+
+        f"drawtext=text='{bottom_text}'{font_arg}"
+        f":fontsize=40:fontcolor=white:borderw=3:bordercolor=black"
+        f":x=(w-text_w)/2:y=h-100"
+    )
+
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", input_path,
+        "-vf", vf,
+        "-c:v", "libx264", "-c:a", "copy",
+        "-preset", "fast",
+        output_path
+    ]
+
+    try:
+        result = await asyncio.to_thread(
+            subprocess.run, cmd,
+            capture_output=True, timeout=60
+        )
+        if result.returncode != 0:
+            print(f"[WARN] ffmpeg error: {result.stderr.decode()[:300]}")
+            return video_bytes
+        with open(output_path, "rb") as f:
+            out = f.read()
+        print(f"[INFO] Text overlay done, {len(out)} bytes")
+        return out
+    except Exception as e:
+        print(f"[WARN] Text overlay failed: {e}")
+        return video_bytes
+    finally:
+        for p in [input_path, output_path]:
+            try: os.unlink(p)
+            except Exception: pass
 
 
 ROAST_MESSAGES = [
@@ -140,16 +226,43 @@ async def _roast_while_waiting(message):
     except Exception:
         pass
 
+# ─── ЛИМИТ: одно видео в сутки на пользователя ──────────────────────────────
+# { user_id: "YYYY-MM-DD" }
+_user_last_video: dict = {}
+
+def _check_daily_limit(user_id: int) -> bool:
+    """Возвращает True если пользователь уже получил видео сегодня."""
+    import datetime
+    today = datetime.date.today().isoformat()
+    return _user_last_video.get(user_id) == today
+
+def _mark_used(user_id: int):
+    import datetime
+    _user_last_video[user_id] = datetime.date.today().isoformat()
+
+
 # ─── HANDLERS ───────────────────────────────────────────────────────────────
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "Он в сети — общается с ИИ.\nНу и ладно.\n\n"
         "Отправь своё фото — получи себя в виде ИИ-девушки "
-        "которая поёт про него 🤖🎵"
+        "которая поёт про него 🤖🎵\n\n"
+        "⚠️ Одно видео в сутки на человека."
     )
 
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+
+    # Проверяем лимит до всего остального
+    if _check_daily_limit(user_id):
+        await update.message.reply_text(
+            "Ты уже получила своё видео сегодня 🎬\n\n"
+            "Возвращайся завтра — сделаю новое 🤍\n\n"
+            "А пока → слушай трек: band.link/vcvotivsyanashalubov"
+        )
+        return
+
     msg = await update.message.reply_text("⏳ Шаг 1/2 — делаю твою ИИ-версию... (~10с)")
 
     try:
@@ -161,7 +274,8 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         print(f"[INFO] Got photo {len(image_bytes)} bytes")
 
         # Шаг 1 — GFPGAN: AI-кожа, гламур
-        enhanced_bytes = await enhance_face(image_bytes)
+        stage = "GFPGAN (шаг 1/2)"
+        enhanced_url = await enhance_face(image_bytes)
         print(f"[INFO] GFPGAN done in {time.time()-t0:.1f}s")
 
         await msg.edit_text("⏳ Шаг 2/2 — записываю видео... (~2-3 мин)")
@@ -170,8 +284,12 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         asyncio.create_task(_roast_while_waiting(update.message))
 
         # Шаг 2 — OmniHuman: поёт под трек
-        video_bytes = await create_singing_video(enhanced_bytes)
+        stage = "OmniHuman (шаг 2/2)"
+        video_bytes = await create_singing_video(enhanced_url)
         print(f"[INFO] Total done in {time.time()-t0:.1f}s, video {len(video_bytes)} bytes")
+
+        # Добавляем текст на видео
+        video_bytes = await add_text_overlay(video_bytes)
 
         keyboard = [
             [InlineKeyboardButton("🎵 Слушать трек", url=TRACK_URL)],
@@ -190,6 +308,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
         await msg.delete()
+        _mark_used(user_id)
 
     except Exception as e:
         await msg.edit_text(
@@ -197,6 +316,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Попробуй другое фото — лучше всего портрет анфас с чётким лицом."
         )
         print(f"[ERROR] {type(e).__name__}: {e}")
+        await notify_admin(context.application, update.effective_user, e, stage)
 
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
