@@ -14,10 +14,10 @@ REPLICATE_API_TOKEN = os.getenv("REPLICATE_API_TOKEN")
 CHORUS_AUDIO_URL    = os.getenv("CHORUS_AUDIO_URL")
 TRACK_URL           = os.getenv("TRACK_URL", "https://band.link/vcvotivsyanashalubov")
 TIKTOK_SOUND_URL    = "https://vt.tiktok.com/ZS9dkQxdcqNFN-RYvnX"
-ADMIN_CHAT_ID       = os.getenv("ADMIN_CHAT_ID")  # ← добавь в Railway Variables
+ADMIN_CHAT_ID       = os.getenv("ADMIN_CHAT_ID")
 
 
-# ─── НОВОЕ 1: Алерт администратору при ошибке ────────────────────────────────
+# ─── АЛЕРТ АДМИНИСТРАТОРУ ────────────────────────────────────────────────────
 async def notify_admin(app, user, error: Exception, stage: str):
     if not ADMIN_CHAT_ID:
         return
@@ -34,7 +34,7 @@ async def notify_admin(app, user, error: Exception, stage: str):
         print(f"[WARN] Could not notify admin: {e}")
 
 
-# ─── НОВОЕ 2: Лимит одно видео в сутки ──────────────────────────────────────
+# ─── ЛИМИТ: одно видео в сутки ───────────────────────────────────────────────
 _user_last_video: dict = {}
 
 def _check_daily_limit(user_id: int) -> bool:
@@ -46,7 +46,7 @@ def _mark_used(user_id: int):
     _user_last_video[user_id] = datetime.date.today().isoformat()
 
 
-# ─── ШАГ 1: GFPGAN — AI-гламур на коже (~5с) ────────────────────────────────
+# ─── ШАГ 1: GFPGAN ───────────────────────────────────────────────────────────
 async def enhance_face(image_bytes: bytes) -> bytes:
     os.environ["REPLICATE_API_TOKEN"] = REPLICATE_API_TOKEN
 
@@ -58,15 +58,10 @@ async def enhance_face(image_bytes: bytes) -> bytes:
     output = await asyncio.to_thread(
         replicate.run,
         "tencentarc/gfpgan:0fbacf7afc6c144e5be9767cff80f25aff23e52b0708f17e20f9879b2f21516c",
-        input={
-            "img":     buf,
-            "version": "v1.4",
-            "scale":   2,
-        }
+        input={"img": buf, "version": "v1.4", "scale": 2}
     )
 
     print(f"[INFO] GFPGAN output: {output}")
-
     url = output if isinstance(output, str) else (output.url if hasattr(output, "url") else str(output))
 
     async with httpx.AsyncClient(timeout=30) as client:
@@ -75,7 +70,7 @@ async def enhance_face(image_bytes: bytes) -> bytes:
         return resp.content
 
 
-# ─── ШАГ 2: OmniHuman — фото + аудио → видео с пением ───────────────────────
+# ─── ШАГ 2: OmniHuman ────────────────────────────────────────────────────────
 async def create_singing_video(image_bytes: bytes) -> bytes:
     os.environ["REPLICATE_API_TOKEN"] = REPLICATE_API_TOKEN
 
@@ -84,16 +79,12 @@ async def create_singing_video(image_bytes: bytes) -> bytes:
     img.save(buf, format="JPEG", quality=95)
     buf.seek(0)
 
-    # Retry при rate limit (429)
     for attempt in range(5):
         try:
             output = await asyncio.to_thread(
                 replicate.run,
                 "bytedance/omni-human",
-                input={
-                    "image": buf,
-                    "audio": CHORUS_AUDIO_URL,
-                }
+                input={"image": buf, "audio": CHORUS_AUDIO_URL}
             )
             break
         except Exception as e:
@@ -135,10 +126,10 @@ async def create_singing_video(image_bytes: bytes) -> bytes:
         return resp.content
 
 
-# ─── НОВОЕ 3: Наложение текста на видео через ffmpeg ─────────────────────────
+# ─── НАЛОЖЕНИЕ ТЕКСТА НА ВИДЕО ───────────────────────────────────────────────
 async def add_text_overlay(video_bytes: bytes) -> bytes:
     import tempfile, subprocess, shutil
-    # Пробуем системный ffmpeg, если нет — берём из imageio-ffmpeg
+
     ffmpeg_path = shutil.which("ffmpeg")
     if not ffmpeg_path:
         try:
@@ -147,7 +138,7 @@ async def add_text_overlay(video_bytes: bytes) -> bytes:
         except Exception:
             pass
     if not ffmpeg_path:
-        print("[WARN] ffmpeg not found anywhere, skipping text overlay")
+        print("[WARN] ffmpeg not found, skipping text overlay")
         return video_bytes
 
     with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as fin:
@@ -155,18 +146,19 @@ async def add_text_overlay(video_bytes: bytes) -> bytes:
         input_path = fin.name
     output_path = input_path.replace(".mp4", "_out.mp4")
 
+    # Только латиница — шрифт не нужен
     vf = (
-        f"drawtext=text='AI version'{font_arg}"
-        f":fontsize=52:fontcolor=white:borderw=3:bordercolor=black"
-        f":x=(w-text_w)/2:y=80:enable='lte(t,3)',"
+        "drawtext=text='AI version'"
+        ":fontsize=52:fontcolor=white:borderw=3:bordercolor=black"
+        ":x=(w-text_w)/2:y=80:enable='lte(t,3)',"
 
-        f"drawtext=text='Make your own:'{font_arg}"
-        f":fontsize=38:fontcolor=white:borderw=3:bordercolor=black"
-        f":x=(w-text_w)/2:y=h-130,"
+        "drawtext=text='Make your own:'"
+        ":fontsize=38:fontcolor=white:borderw=3:bordercolor=black"
+        ":x=(w-text_w)/2:y=h-130,"
 
-        f"drawtext=text='@veeka_ai_bot in Telegram'{font_arg}"
-        f":fontsize=38:fontcolor=white:borderw=3:bordercolor=black"
-        f":x=(w-text_w)/2:y=h-80"
+        "drawtext=text='@veeka_ai_bot in Telegram'"
+        ":fontsize=38:fontcolor=white:borderw=3:bordercolor=black"
+        ":x=(w-text_w)/2:y=h-80"
     )
 
     cmd = [ffmpeg_path, "-y", "-i", input_path, "-vf", vf,
@@ -235,7 +227,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
 
-    # Проверяем лимит (администратор не ограничен)
     is_admin = update.effective_user.username in ("pmdenka",)
     if _check_daily_limit(user_id) and not is_admin:
         await update.message.reply_text(
@@ -260,14 +251,12 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         print(f"[INFO] GFPGAN done in {time.time()-t0:.1f}s")
 
         await msg.edit_text("⏳ Шаг 2/2 — записываю видео... (~2-3 мин)")
-
         asyncio.create_task(_roast_while_waiting(update.message))
 
         stage = "OmniHuman (шаг 2/2)"
         video_bytes = await create_singing_video(enhanced_bytes)
         print(f"[INFO] Total done in {time.time()-t0:.1f}s, video {len(video_bytes)} bytes")
 
-        # Накладываем текст
         video_bytes = await add_text_overlay(video_bytes)
 
         keyboard = [
