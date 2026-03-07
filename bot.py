@@ -299,6 +299,13 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 def main():
+    # Устанавливаем ffmpeg если его нет
+    import shutil, subprocess
+    if not shutil.which("ffmpeg"):
+        print("[INFO] Installing ffmpeg...")
+        subprocess.run(["apt-get", "install", "-y", "ffmpeg", "fonts-dejavu"], capture_output=True)
+        print("[INFO] ffmpeg installed" if shutil.which("ffmpeg") else "[WARN] ffmpeg install failed")
+
     for attempt in range(5):
         try:
             req.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/deleteWebhook?drop_pending_updates=true", timeout=10)
