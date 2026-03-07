@@ -155,8 +155,32 @@ async def add_text_overlay(video_bytes: bytes) -> bytes:
         input_path = fin.name
     output_path = input_path.replace(".mp4", "_out.mp4")
 
-    font = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
-    font_arg = f":fontfile={font}" if os.path.exists(font) else ""
+    # Ищем шрифт с поддержкой кириллицы
+    font = ""
+    for candidate in [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf",
+        "/tmp/DejaVuSans-Bold.ttf",
+    ]:
+        if os.path.exists(candidate):
+            font = candidate
+            break
+
+    # Если нет — скачиваем
+    if not font:
+        try:
+            import urllib.request
+            urllib.request.urlretrieve(
+                "https://github.com/dejavu-fonts/dejavu-fonts/raw/master/ttf/DejaVuSans-Bold.ttf",
+                "/tmp/DejaVuSans-Bold.ttf"
+            )
+            font = "/tmp/DejaVuSans-Bold.ttf"
+            print("[INFO] Font downloaded")
+        except Exception as fe:
+            print(f"[WARN] Font download failed: {fe}")
+
+    font_arg = f":fontfile={font}" if font else ""
 
     vf = (
         f"drawtext=text='это ИИ-версия'{font_arg}"
@@ -238,8 +262,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
 
-    # Проверяем лимит
-    if _check_daily_limit(user_id):
+    # Проверяем лимит (администратор не ограничен)
+    is_admin = update.effective_user.username in ("pmdenka",)
+    if _check_daily_limit(user_id) and not is_admin:
         await update.message.reply_text(
             "Ты уже получила своё видео сегодня 🎬\n\n"
             "Возвращайся завтра — сделаю новое 🤍\n\n"
@@ -282,7 +307,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             caption=(
                 "Твоя ИИ-версия поёт про него 💀\n\n"
                 "Сохрани видео → нажми кнопку ниже → снимешь ролик под этот звук в TikTok 👇\n\n"
-                "Отметь @veeka_chered и #яИИдевушка"
+                "Отметь @veeka.chered и #яИИдевушка"
             ),
             reply_markup=InlineKeyboardMarkup(keyboard),
             supports_streaming=True,
