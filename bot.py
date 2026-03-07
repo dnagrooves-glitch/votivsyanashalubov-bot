@@ -129,7 +129,12 @@ async def create_singing_video(image_bytes: bytes) -> bytes:
 # ─── НАЛОЖЕНИЕ ТЕКСТА НА ВИДЕО ───────────────────────────────────────────────
 async def add_text_overlay(video_bytes: bytes) -> bytes:
     import tempfile, subprocess, shutil
-    from PIL import ImageDraw, ImageFont
+
+    # Ищем overlay.png рядом с bot.py
+    overlay_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "overlay.png")
+    if not os.path.exists(overlay_path):
+        print("[WARN] overlay.png not found, skipping text overlay")
+        return video_bytes
 
     ffmpeg_path = shutil.which("ffmpeg")
     if not ffmpeg_path:
@@ -142,65 +147,17 @@ async def add_text_overlay(video_bytes: bytes) -> bytes:
         print("[WARN] ffmpeg not found, skipping text overlay")
         return video_bytes
 
-    # Получаем размер видео через ffprobe
-    try:
-        probe = await asyncio.to_thread(
-            subprocess.run,
-            [ffmpeg_path, "-i", "pipe:0", "-hide_banner"],
-            input=video_bytes, capture_output=True, timeout=10
-        )
-        import re
-        m = re.search(r'(\d{3,4})x(\d{3,4})', probe.stderr.decode())
-        w, h = (int(m.group(1)), int(m.group(2))) if m else (512, 512)
-    except Exception:
-        w, h = 512, 512
-    print(f"[INFO] Video size: {w}x{h}")
-
-    # Создаём PNG с текстом через Pillow
-    overlay = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(overlay)
-
-    def draw_text_with_border(draw, text, x, y, size=40):
-        try:
-            font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", size)
-        except Exception:
-            font = ImageFont.load_default()
-        # Обводка
-        for dx, dy in [(-2,0),(2,0),(0,-2),(0,2),(-2,-2),(2,-2),(-2,2),(2,2)]:
-            draw.text((x+dx, y+dy), text, font=font, fill=(0,0,0,220))
-        draw.text((x, y), text, font=font, fill=(255,255,255,255))
-
-    # Текст снизу (постоянный)
-    line1, line2 = "Make your own", "@veeka_ai_bot Telegram"
-    try:
-        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 38)
-    except Exception:
-        font = ImageFont.load_default()
-
-    bbox1 = draw.textbbox((0,0), line1, font=font)
-    bbox2 = draw.textbbox((0,0), line2, font=font)
-    x1 = (w - (bbox1[2]-bbox1[0])) // 2
-    x2 = (w - (bbox2[2]-bbox2[0])) // 2
-    draw_text_with_border(draw, line1, x1, h-120, 38)
-    draw_text_with_border(draw, line2, x2, h-72, 38)
-
-    # Сохраняем overlay PNG
-    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as fpng:
-        overlay.save(fpng.name, "PNG")
-        png_path = fpng.name
-
-    # Сохраняем входное видео
     with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as fin:
         fin.write(video_bytes)
         input_path = fin.name
     output_path = input_path.replace(".mp4", "_out.mp4")
 
-    # ffmpeg: накладываем PNG поверх видео
+    # Накладываем PNG поверх видео — scale подгоняет под размер видео
     cmd = [
         ffmpeg_path, "-y",
         "-i", input_path,
-        "-i", png_path,
-        "-filter_complex", "[0:v][1:v]overlay=0:0",
+        "-i", overlay_path,
+        "-filter_complex", "[1:v]scale=iw:ih[ov];[0:v][ov]overlay=0:0",
         "-c:v", "libx264", "-c:a", "copy", "-preset", "fast",
         output_path
     ]
@@ -218,7 +175,7 @@ async def add_text_overlay(video_bytes: bytes) -> bytes:
         print(f"[WARN] Text overlay failed: {e}")
         return video_bytes
     finally:
-        for p in [input_path, output_path, png_path]:
+        for p in [input_path, output_path]:
             try: os.unlink(p)
             except Exception: pass
 
