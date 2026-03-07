@@ -147,16 +147,17 @@ async def add_text_overlay(video_bytes: bytes) -> bytes:
     output_path = input_path.replace(".mp4", "_out.mp4")
 
     # Только латиница — шрифт не нужен
+    # Важно: двоеточие в тексте нужно экранировать как \:
     vf = (
         "drawtext=text='AI version'"
         ":fontsize=52:fontcolor=white:borderw=3:bordercolor=black"
         ":x=(w-text_w)/2:y=80:enable='lte(t,3)',"
 
-        "drawtext=text='Make your own:'"
+        "drawtext=text='Make your own'"
         ":fontsize=38:fontcolor=white:borderw=3:bordercolor=black"
         ":x=(w-text_w)/2:y=h-130,"
 
-        "drawtext=text='@veeka_ai_bot in Telegram'"
+        "drawtext=text='@veeka_ai_bot Telegram'"
         ":fontsize=38:fontcolor=white:borderw=3:bordercolor=black"
         ":x=(w-text_w)/2:y=h-80"
     )
@@ -167,7 +168,7 @@ async def add_text_overlay(video_bytes: bytes) -> bytes:
     try:
         result = await asyncio.to_thread(subprocess.run, cmd, capture_output=True, timeout=60)
         if result.returncode != 0:
-            print(f"[WARN] ffmpeg error: {result.stderr.decode()[:300]}")
+            print(f"[WARN] ffmpeg error: {result.stderr.decode()[-500:]}")
             return video_bytes
         with open(output_path, "rb") as f:
             out = f.read()
