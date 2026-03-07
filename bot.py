@@ -155,43 +155,16 @@ async def add_text_overlay(video_bytes: bytes) -> bytes:
         input_path = fin.name
     output_path = input_path.replace(".mp4", "_out.mp4")
 
-    # Ищем шрифт с поддержкой кириллицы
-    font = ""
-    for candidate in [
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-        "/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf",
-        "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf",
-        "/tmp/DejaVuSans-Bold.ttf",
-    ]:
-        if os.path.exists(candidate):
-            font = candidate
-            break
-
-    # Если нет — скачиваем
-    if not font:
-        try:
-            import urllib.request
-            urllib.request.urlretrieve(
-                "https://github.com/dejavu-fonts/dejavu-fonts/raw/master/ttf/DejaVuSans-Bold.ttf",
-                "/tmp/DejaVuSans-Bold.ttf"
-            )
-            font = "/tmp/DejaVuSans-Bold.ttf"
-            print("[INFO] Font downloaded")
-        except Exception as fe:
-            print(f"[WARN] Font download failed: {fe}")
-
-    font_arg = f":fontfile={font}" if font else ""
-
     vf = (
-        f"drawtext=text='это ИИ-версия'{font_arg}"
+        f"drawtext=text='AI version'{font_arg}"
         f":fontsize=52:fontcolor=white:borderw=3:bordercolor=black"
         f":x=(w-text_w)/2:y=80:enable='lte(t,3)',"
 
-        f"drawtext=text='Сделать свою версию:'{font_arg}"
+        f"drawtext=text='Make your own:'{font_arg}"
         f":fontsize=38:fontcolor=white:borderw=3:bordercolor=black"
         f":x=(w-text_w)/2:y=h-130,"
 
-        f"drawtext=text='@veeka_ai_bot в Telegram'{font_arg}"
+        f"drawtext=text='@veeka_ai_bot in Telegram'{font_arg}"
         f":fontsize=38:fontcolor=white:borderw=3:bordercolor=black"
         f":x=(w-text_w)/2:y=h-80"
     )
@@ -222,15 +195,15 @@ ROAST_MESSAGES = [
     "🔍 Сканирую его активность в сети...",
     "📱 Найдено: последний онлайн 2 минуты назад.\nВидел сообщение. Не ответил.",
     "🤖 ИИ-анализ профиля:\n\n"
-    "— Тип: «я занят» (сидит в TikTok)\n"
+    "— Режим: «Не тревожить» (залипает на ИИ-девушек в TikTok)\n"
     "— Статус: притворяется что спит\n"
     "— Уровень игнора: 94/100",
     "📊 Статистика за 7 дней:\n\n"
     "Просмотрел твои сторис: ✅\n"
-    "Ответил: ❌\n"
-    "Поставил лайк чужой: ✅✅✅",
+    "Поставил лайк: ❌\n"
+    "Поставил лайк салату: ✅✅✅",
     "💀 Нейросеть говорит:\n\n"
-    "«Он не потерялся. Телефон не сломан.\n"
+    "«Он не пропал. Телефон не сломан.\n"
     "Он просто ИИ-девушку нашёл.»",
     "🎤 Твоя ИИ-версия разогревает голос...\n\nОн об этом пожалеет.",
     "⚠️ ВНИМАНИЕ: видео почти готово.\n\nПодготовь попкорн.",
